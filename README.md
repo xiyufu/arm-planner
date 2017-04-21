@@ -1,5 +1,5 @@
 # arm-planner
-Compare different planners and IK solvers.
+Compare different planners and IK solvers using the universial robot. Please install the robot's package first.
 
 Current files:
 
