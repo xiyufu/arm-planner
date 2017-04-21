@@ -3,7 +3,7 @@ Compare different planners and IK solvers.
 
 Current files:
 
-Note: before run these nodes, launch the demo.launch in ur10_moveit_config package first.
+Note: before running these nodes, launch the demo.launch in ur10_moveit_config package first.
 
 1. move_group_interface_test.cpp - just some test codes
 2. objects_test.cpp - just another test codes
