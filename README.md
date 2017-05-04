@@ -19,4 +19,4 @@ Note: before running these nodes, launch the demo.launch in ur10_moveit_config p
 run catkin_make in the catkin workspace. Then, after launching the demo.launch of ur10, type:  
 For pingpong scenario: ```rosrun ur_tests pick_up```  
 For ik compare: ```roslaunch ur_tests ur10.launch```  
-For shelf scenario: ``` rosrun ur_tests planner_test```  
+For shelf scenario using ompl's default planner``` rosrun ur_tests planner_test o```  
