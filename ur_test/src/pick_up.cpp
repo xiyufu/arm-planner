@@ -1,20 +1,21 @@
+#include <cmath>
+
 #include <ros/ros.h>
 #include <geometry_msgs/Pose.h>
 
 #include <moveit_msgs/PlanningScene.h>
 #include <moveit_msgs/AttachedCollisionObject.h>
-#include <moveit_msgs/GetStateValidity.h>
 #include <moveit_msgs/ApplyPlanningScene.h>
-#include <moveit_msgs/DisplayTrajectory.h>
 
 #include <moveit/planning_interface/planning_interface.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/kinematic_constraints/utils.h>
 #include <moveit/robot_model_loader/robot_model_loader.h>
+#include <moveit/robot_model/robot_model.h>
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/robot_state/conversions.h>
-#include <moveit_visual_tools/moveit_visual_tools.h>
+#include <moveit/robot_trajectory/robot_trajectory.h>
 
 //Note: in config/ompl_planning.yaml, there is a term called:
 //longest_valid_segement_fraction. This is a very important factor
@@ -22,9 +23,41 @@
 //is a better choice. Smaller value costs more time but is (a lot) more
 //likely to find a solution.
 
+double trajInfo(moveit_msgs::RobotTrajectory* traj_msg,
+                robot_model::RobotModelConstPtr r_model,
+                const robot_model::JointModelGroup* j_group,
+                robot_state::RobotStatePtr ref_state)
+//trajInfo should be used before move_group.execute because 
+//we need the reference state.
+{
+  robot_trajectory::RobotTrajectory robot_traj(r_model, j_group);
+  robot_traj.setRobotTrajectoryMsg(*ref_state, *traj_msg);
+
+  double length = 0.0;
+  std::vector<Eigen::Vector3d> way_points;
+
+  int way_point_count = (int)robot_traj.getWayPointCount();
+  for (int i = 0; i < way_point_count; i++)
+  {
+    const Eigen::Affine3d& ee_pose = robot_traj.getWayPoint(i).getGlobalLinkTransform("ee_link");
+    way_points.push_back(ee_pose.translation());
+  }
+
+  for (int i = 1; i < way_point_count; i++)
+  {
+    Eigen::Vector3d distance = way_points[i] - way_points[i-1];
+    length += sqrt(distance.dot(distance));
+  }
+  
+  ROS_INFO("Way point number: %d", way_point_count);
+  
+  return length;
+}
+
 
 int main(int argc, char **argv)
 {
+  //Start ros
   ros::init(argc, argv, "pick_and_place");
   ros::AsyncSpinner spinner(1);
   spinner.start();
@@ -163,21 +196,21 @@ int main(int argc, char **argv)
       break;
   }
   ROS_INFO("Planning %s after %d attempts", success ? "successed" : "failed", iter);
-  if (success)
-    ROS_INFO("Planning time: %6.3f", my_plan.planning_time_);
-  ROS_INFO("********************************");
-
-/*  
-  //Visualize
-  namespace rvt = rviz_visual_tools;
-  moveit_visual_tools::MoveItVisualTools visual_tools("world");
-  visual_tools.publishTrajectoryLine(my_plan.trajectory_, joint_model_group);
-  visual_tools.trigger();
-
-  for (int i = 0; i < 5; i++)
-    sleep_one_second.sleep();
+/*double trajInfo(moveit_msgs::RobotTrajectory* traj_msg,
+                moveit_msgs::RobotModelConsPtr r_model,
+                robot_model::JointModelGroup* j_group,
+                robot_state::RobotStatePrt ref_state)
 */
-
+  if (success)
+  {
+    ROS_INFO("Planning time: %6.3f", my_plan.planning_time_);
+    double length = trajInfo(&(my_plan.trajectory_), move_group.getRobotModel(),
+                              joint_model_group, move_group.getCurrentState());
+    ROS_INFO("Trajectory length: %f", length);
+  }
+  ROS_INFO("********************************");
+  
+  //Execute
   ROS_INFO("Executing the plan......");
 
   success = move_group.execute(my_plan);
@@ -225,7 +258,12 @@ int main(int argc, char **argv)
   while (!success);
   ROS_INFO("Planning %s after %d attempts", success ? "successed" : "failed", iter);
   if (success)
+  {
     ROS_INFO("Planning time: %6.3f", my_plan.planning_time_);
+    double length = trajInfo(&(my_plan.trajectory_), move_group.getRobotModel(),
+                              joint_model_group, move_group.getCurrentState());
+    ROS_INFO("Trajectory length: %f", length);
+  }
   ROS_INFO("********************************");
   
   if (success)

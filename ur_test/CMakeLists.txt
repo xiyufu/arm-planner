@@ -55,4 +55,11 @@ add_executable(compare_ik src/compare_ik.cpp)
 target_link_libraries(compare_ik ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 install(TARGETS compare_ik DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
+add_executable(planner_test src/planner_test.cpp)
+target_link_libraries(planner_test ${catkin_LIBRARIES} ${Boost_LIBRARIES})
+install(TARGETS planner_test DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+add_executable(path_length src/path_length_test.cpp)
+target_link_libraries(path_length ${catkin_LIBRARIES} ${Boost_LIBRARIES})
+install(TARGETS path_length DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
