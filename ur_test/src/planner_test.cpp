@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include <ros/ros.h>
 #include <geometry_msgs/Pose.h>
 
@@ -12,36 +14,56 @@
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/robot_state/conversions.h>
 
-bool pick(moveit::planning_interface::MoveGroupInterface* mg,
-          double tolerance, double time_out, int attempts,
-          geometry_msgs::Pose target_pose, 
-          moveit_msgs::AttachedCollisionObject target,
-          moveit::planning_interface::MoveGroupInterface::Plan* my_plan)
+typedef Eigen::Matrix<double, 6, 1> vec6d;
+
+void trajInfo(moveit_msgs::RobotTrajectory* traj_msg,
+              robot_model::RobotModelConstPtr r_model,
+              const robot_model::JointModelGroup* j_group,
+                robot_state::RobotStatePtr ref_state,
+                double* info_pair)
+//trajInfo should be called before move_group.execute because 
+//we need the reference state.
 {
-  //set tolerance
-  mg->setGoalPositionTolerance(tolerance);
-  mg->setGoalOrientationTolerance(tolerance);
+  robot_trajectory::RobotTrajectory robot_traj(r_model, j_group);
+  robot_traj.setRobotTrajectoryMsg(*ref_state, *traj_msg);
 
-  //set target
-  mg->setPoseTarget(target_pose);
-  
-  //set planning time
-  mg->setPlanningTime(time_out);
+  info_pair[0] = 0.0;
+  std::vector<Eigen::Vector3d> way_points;
 
-  ROS_INFO("**********************************************");
-  ROS_INFO("Planning...");
-  int iter = 0;
-  while (!mg->plan(*my_plan))
+  int way_point_count = (int)robot_traj.getWayPointCount();
+  for (int i = 0; i < way_point_count; i++)
   {
-    iter++;
-    if (iter > attempts)
-    {
-      ROS_INFO("Failed");
-      return false;
-    }
+    const Eigen::Affine3d& ee_pose = robot_traj.getWayPoint(i).getGlobalLinkTransform("ee_link");
+    way_points.push_back(ee_pose.translation());
+//    ROS_INFO_STREAM("iteration " << i <<": " << way_points[i]);
   }
-  return true;
-}//This function can work properly... Abort.
+
+  for (int i = 1; i < way_point_count; i++)
+  {
+    Eigen::Vector3d distance = way_points[i] - way_points[i-1];
+    info_pair[0] += sqrt(distance.dot(distance));
+  }
+
+  /****** smoothness ******/
+  vec6d accelerations[robot_traj.getWayPointCount()];//vec6d is defined at the beginning of this file.
+  std::deque<double> durations = robot_traj.getWayPointDurations();
+  std::vector<trajectory_msgs::JointTrajectoryPoint> points = traj_msg->joint_trajectory.points;
+  for (int i = 0; i < way_point_count; i++)
+  {
+    vec6d temp(points[i].accelerations.data());
+    accelerations[i] = temp;
+  }
+  info_pair[1] = 0.0;//smoothness is measured by jerk cost 
+  for (int i = 1; i < way_point_count; i++)
+  {
+    vec6d acc_diff = accelerations[i] - accelerations[i-1];
+    double time_span = (durations[i] + durations[i-1])/2;
+    vec6d jerk = acc_diff/time_span;
+    info_pair[1] += jerk.dot(jerk) * time_span;
+  }
+  //ROS_INFO("Way point number: %d", way_point_count);
+
+}
 
 int main(int argc, char** argv)
 {
@@ -54,92 +76,10 @@ int main(int argc, char** argv)
   ros::Duration sleep_one_second(1.0);//publishing needs some time.
   ros::Duration sleep_short_time(0.5);
 
-  ros::Publisher planning_scene_diff_publisher = node_handle.advertise<moveit_msgs::PlanningScene>("planning_scene", 1);
-  while (planning_scene_diff_publisher.getNumSubscribers() < 1)
-  {
-    sleep_one_second.sleep();
-  }
-  //Construct environment(a shelf witn one ball on it)  using moveit_msgs.
-  moveit_msgs::PlanningScene planning_scene;
-  planning_scene.is_diff = true;
-
-  moveit_msgs::CollisionObject shelf_board[5];
-  
-  shape_msgs::SolidPrimitive level;
-  level.type = level.BOX;
-  level.dimensions.resize(3);
-  level.dimensions[0] = 1.5;
-  level.dimensions[1] = 0.5;
-  level.dimensions[2] = 0.02;
-
-  geometry_msgs::Pose pose;
-  pose.position.x = 0.0;
-  pose.position.y = 1.0;
-  pose.position.z = 0.0;
-  pose.orientation.w = 1.0;
-  
-  for (int i = 0; i < 5; i++)
-  {
-    pose.position.z = i*0.3;
-
-    shelf_board[i].id = "board" + std::to_string(i);
-    shelf_board[i].header.frame_id = "base_link";
-    shelf_board[i].primitives.push_back(level);
-    shelf_board[i].primitive_poses.push_back(pose);
-    shelf_board[i].operation = shelf_board[i].ADD;
-    planning_scene.world.collision_objects.push_back(shelf_board[i]);
-  }
-
-  shape_msgs::SolidPrimitive side;
-  side.type = level.BOX;
-  side.dimensions.resize(3);
-  side.dimensions[0] = 0.02;
-  side.dimensions[1] = 0.5;
-  side.dimensions[2] = 1.22;
-
-  moveit_msgs::CollisionObject side_board[2];
-
-  pose.position.x = 0.76;
-  pose.position.y = 1.0;
-  pose.position.z = 0.6;
-
-  for (int i = 0; i < 2; i++)
-  {
-    pose.position.x -= i*1.52;
-    side_board[i].id = "side" + std::to_string(i);
-    side_board[i].header.frame_id = "base_link";
-    side_board[i].primitives.push_back(side);
-    side_board[i].primitive_poses.push_back(pose);
-    side_board[i].operation = side_board[i].ADD;
-    planning_scene.world.collision_objects.push_back(side_board[i]);
-  }
-  //target: ball
-  shape_msgs::SolidPrimitive ball;
-  ball.type = ball.SPHERE;
-  ball.dimensions.resize(3);
-  ball.dimensions[0] = 0.1;
-
-  pose.position.x = 0.5;
-  pose.position.y = 1.15;
-  pose.position.z = 0.12;
-
-  moveit_msgs::AttachedCollisionObject target;
-  target.link_name = "ee_link";
-  target.object.header.frame_id = "base_link";
-  target.object.id = "target";
-  target.object.primitives.push_back(ball);
-  target.object.primitive_poses.push_back(pose);
-  target.object.operation = side_board[0].ADD;
-
-  planning_scene.world.collision_objects.push_back(target.object);
-
-  planning_scene_diff_publisher.publish(planning_scene);
-  
-  //Get move group interface
   moveit::planning_interface::MoveGroupInterface move_group("manipulator");
   const robot_state::JointModelGroup *joint_model_group =
     move_group.getCurrentState()->getJointModelGroup("manipulator");
-
+  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
 
   //target pose
   geometry_msgs::Pose target_pose;
@@ -156,6 +96,7 @@ int main(int argc, char** argv)
   //set tolerance
   move_group.setGoalPositionTolerance(0.01);
   move_group.setGoalOrientationTolerance(0.01);
+  /* Let's foucs on OMPL first 
   switch (*argv[1])
   {
     case 'o':
@@ -178,6 +119,7 @@ int main(int argc, char** argv)
           break;
         }
       }
+      
       break;
     }
     case 'c':
@@ -222,7 +164,83 @@ int main(int argc, char** argv)
       break;
 
     }
-  } 
+  } */
+
+  robot_model::RobotModelConstPtr robot_model = move_group.getRobotModel();
+  robot_state::RobotStatePtr kinematic_state(new robot_state::RobotState(robot_model));
+
+  ROS_INFO("********First attempt********");
+  move_group.setPlanningTime(10.0);
+  move_group.setPoseTarget(target_pose);
+  
+  bool success = move_group.plan(my_plan);
+
+  if (success)
+  {
+    double temp_info[2] = {0.0, 0.0};
+    trajInfo(&(my_plan.trajectory_), robot_model, joint_model_group, kinematic_state, temp_info);
+    ROS_INFO("Planning successed");
+    ROS_INFO("Planning time: %f", my_plan.planning_time_);
+    ROS_INFO("Path length: %f", temp_info[0]);
+    ROS_INFO("Path smoothness: %f", temp_info[1]);
+  }
+  else
+    ROS_INFO("Failed");
+
+  ROS_INFO("Press b to start test, press any other key to quit");
+  char is_test = 'n';
+  std::cin >> is_test;
+  if ( is_test == 'b' )
+  {
+    move_group.clearPoseTargets();
+    move_group.setPoseTarget(target_pose);
+    ROS_INFO("Set iteration times");
+    int total_attempt = 1;
+    std::cin >> total_attempt;
+
+    double max_time = 2.0;
+    ROS_INFO("Set maxium planning time");
+    std::cin >> max_time;
+    move_group.setPlanningTime(max_time);
+
+    double number_success = 0.0;
+    double my_planning_time = 0.0;
+    double my_length = 0.0;
+    double my_smoothness = 0.0;
+
+    ROS_INFO("Test started");
+    for (int i = 0; i < total_attempt; i++)
+    {
+      ROS_INFO("********%dth iteration********", (i + 1));
+      success = move_group.plan(my_plan);
+      
+      if (success)
+      {
+        number_success += 1;
+        my_planning_time += my_plan.planning_time_;
+        double temp_info[2] = {0.0, 0.0};
+        trajInfo(&(my_plan.trajectory_), robot_model, joint_model_group, kinematic_state, temp_info);
+        my_length += temp_info[0];
+        my_smoothness += temp_info[1];
+      }
+
+    }
+      
+    if (number_success == 0)
+    {
+      ROS_INFO("number_success = 0");
+      return (0);
+    }
+
+    double success_rate = number_success/((double)total_attempt);
+    my_planning_time = my_planning_time/number_success;
+    my_length = my_length/number_success;
+    my_smoothness = my_smoothness/number_success;
+
+    ROS_INFO("Rate: %f\nTime: %f\nLength: %f\nSmoothness: %f",
+              success_rate, my_planning_time, my_length, my_smoothness);
+
+  }
   sleep_one_second.sleep();
   return 0;
 

@@ -63,3 +63,7 @@ add_executable(path_length src/path_length_test.cpp)
 target_link_libraries(path_length ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 install(TARGETS path_length DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
+add_executable(publish_shelf src/publish_shelf.cpp)
+target_link_libraries(publish_shelf ${catkin_LIBRARIES} ${Boost_LIBRARIES})
+install(TARGETS publish_shelf DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
