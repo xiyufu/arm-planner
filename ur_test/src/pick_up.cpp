@@ -6,6 +6,8 @@
 #include <moveit_msgs/PlanningScene.h>
 #include <moveit_msgs/AttachedCollisionObject.h>
 #include <moveit_msgs/ApplyPlanningScene.h>
+#include <moveit_msgs/DisplayRobotState.h>
+#include <moveit_msgs/DisplayTrajectory.h>
 
 #include <moveit/planning_interface/planning_interface.h>
 #include <moveit/move_group_interface/move_group_interface.h>
@@ -17,6 +19,7 @@
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
+#include <moveit_visual_tools/moveit_visual_tools.h>
 
 //Note: in config/ompl_planning.yaml, there is a term called:
 //longest_valid_segement_fraction. This is a very important factor
@@ -103,6 +106,12 @@ int main(int argc, char **argv)
   planning_scene::PlanningScene planning_scene_obj(move_group.getRobotModel());
 //BE CAREFUL: This planning scene has no connection to the one in move group. We have to maintain it by ourselves.
 
+  //Visualization tools
+  namespace rvt = rviz_visual_tools;
+  moveit_visual_tools::MoveItVisualTools visual_tools("base_link");
+  ROS_INFO("subscribe to /rviz_visual_tools and press any key + enter to continue"); 
+  char vis_pause;
+  std::cin >> vis_pause;
   //Construct planning scene message
   moveit_msgs::PlanningScene planning_scene;
   planning_scene.is_diff = true; //null will be considered as the same.
@@ -132,12 +141,7 @@ int main(int argc, char **argv)
   planning_scene.world.collision_objects.push_back(table_box);
   
   ROS_INFO("Publishing...");
-  //publish table
-  //planning_scene.world.collision_objects[0].operation = table_box.REMOVE;
-  //planning_scene_diff_publisher.publish(planning_scene);
   planning_scene.world.collision_objects[0].operation = table_box.ADD;
-  //planning_scene_diff_publisher.publish(planning_scene);
-  //sleep_short_time.sleep();
 
   //Construct environment-obstacle
   moveit_msgs::CollisionObject obstacle1;
@@ -174,15 +178,7 @@ int main(int argc, char **argv)
   target.object.primitive_poses.push_back(pose);
   target.object.operation = table_box.ADD;
   
-  //planning_scene.world.collision_objects.clear();
   planning_scene.world.collision_objects.push_back(target.object);
-
-  //planning_scene_diff_publisher.publish(planning_scene);
-
-  //planning_scene.world.collision_objects[0].operation = table_box.ADD;
-  
-  //planning_scene_diff_publisher.publish(planning_scene);
-  sleep_short_time.sleep();
 
   planning_scene_interface.applyPlanningScene(planning_scene);
   
@@ -231,6 +227,7 @@ int main(int argc, char **argv)
     trajInfo(&(my_plan.trajectory_), move_group.getRobotModel(),
                joint_model_group, move_group.getCurrentState(), info_pair);
     ROS_INFO("Trajectory length: %f\nTrajectory smoothness: %f", info_pair[0], info_pair[1]);
+  
   }
   ROS_INFO("********************************");
   
@@ -326,6 +323,15 @@ int main(int argc, char **argv)
   std::cin >> command;
   if ( command == 'b' )
   {
+    std::vector<moveit::planning_interface::MoveGroupInterface::Plan> all_plan;
+
+    double largest_jerk_cost = 0.0;
+    double shortest_length = 0.0;
+    double longest_length = 0.0;
+    double smallest_jerk_cost = 0.0;
+    int best_index = 0;
+    int worst_index = 0;
+
     ROS_INFO("Set attempt times (of type int)");
     int total_attempt = 1;
     std::cin >> total_attempt;
@@ -433,12 +439,23 @@ int main(int argc, char **argv)
     }
     while (!success);
     move_group.execute(plan1);
+//all_plan[0] is here!
+    all_plan.push_back(plan1);
+
+    //There is no operator override in MoveGroupInterface, I'm not sure what the default copy method will do.
+    double first_info[2] = {0.0, 0.0};
+    trajInfo(&(plan1.trajectory_), robot_model, joint_model_group, kinematic_state, first_info);
+    shortest_length = first_info[0];
+    longest_length = first_info[0];
+    largest_jerk_cost = first_info[1];
+    smallest_jerk_cost = first_info[1];
 
     if (is_multi == 'y')
     {
       ROS_INFO("planning time set as %f", time_multi);
       move_group.setPlanningTime(time_multi);
     }
+    
     for (int i = 0; i < total_attempt; i++)
     {
       std::cout << "********" << (i + 1) << "th iteration********" << std::endl;
@@ -454,6 +471,17 @@ int main(int argc, char **argv)
         trajInfo(&(plan2.trajectory_), robot_model, joint_model_group, kinematic_state, temp_info);
         my_length[0] += temp_info[0];
         my_smoothness[0] += temp_info[1];
+        all_plan.push_back(plan2);
+        if (temp_info[0] > longest_length)
+        {
+          worst_index = number_success[0]; //start from all_length[1]
+          longest_length = temp_info[0];
+        }
+        if (temp_info[0] < shortest_length)
+        {
+          best_index = number_success[0];
+          shortest_length = temp_info[0];
+        }
       }
     }
 
@@ -482,6 +510,17 @@ int main(int argc, char **argv)
         trajInfo(&(plan1.trajectory_), robot_model, joint_model_group, kinematic_state, temp_info);
         my_length[1] += temp_info[0];
         my_smoothness[1] += temp_info[1];
+        all_plan.push_back(plan1);
+        if (temp_info[0] > longest_length)
+        {
+          worst_index = number_success[0] + number_success[1];
+          longest_length = temp_info[1];
+        }
+        if (temp_info[0] < shortest_length)
+        {  
+          best_index = number_success[0] + number_success[1];
+          shortest_length = temp_info[0];
+        }
       }
 
     }
@@ -552,8 +591,19 @@ ROS_INFO("********%dth iteration********", i);
               success_rate1, my_planning_time[0], my_length[0], my_smoothness[0]);
     ROS_INFO("From ball to free\nRate: %f\nTime: %f\nLength: %f\nSmoothness: %f",
               success_rate2, my_planning_time[1], my_length[1], my_smoothness[1]); 
-  }
   
+    ROS_INFO("BEST LENGTH: %f, WORST LENGTH: %f", shortest_length, longest_length);
+    
+    visual_tools.deleteAllMarkers();
+    rvt::colors my_color = rvt::colors::BLUE;
+    visual_tools.publishTrajectoryLine(all_plan[best_index].trajectory_, kinematic_state->getLinkModel("ee_link"), joint_model_group, my_color);
+    visual_tools.trigger();
+    sleep_short_time.sleep();
+    my_color = rvt::colors::RED;
+    visual_tools.publishTrajectoryLine(all_plan[worst_index].trajectory_, kinematic_state->getLinkModel("ee_link"), joint_model_group, my_color);
+    visual_tools.trigger();
+    sleep_one_second.sleep();
+  }
   sleep_one_second.sleep(); //Sleep for a while is necessary 
   return(0);
 

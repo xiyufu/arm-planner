@@ -67,3 +67,7 @@ add_executable(publish_shelf src/publish_shelf.cpp)
 target_link_libraries(publish_shelf ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 install(TARGETS publish_shelf DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
+add_executable(cartesian_line src/cartesian_line.cpp)
+target_link_libraries(cartesian_line ${catkin_LIBRARIES} ${Boost_LIBRARIES})
+install(TARGETS cartesian_line DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+

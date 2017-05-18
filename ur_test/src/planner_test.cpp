@@ -1,4 +1,5 @@
 #include <cmath>
+#include <stdio.h>
 
 #include <ros/ros.h>
 #include <geometry_msgs/Pose.h>
@@ -13,6 +14,7 @@
 #include <moveit/robot_model_loader/robot_model_loader.h>
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/robot_state/conversions.h>
+#include <moveit_visual_tools/moveit_visual_tools.h>
 
 typedef Eigen::Matrix<double, 6, 1> vec6d;
 
@@ -169,32 +171,53 @@ int main(int argc, char** argv)
   robot_model::RobotModelConstPtr robot_model = move_group.getRobotModel();
   robot_state::RobotStatePtr kinematic_state(new robot_state::RobotState(robot_model));
 
-  ROS_INFO("********First attempt********");
+  ROS_INFO("********First attempt with max_time = 10.0********");
   move_group.setPlanningTime(10.0);
   move_group.setPoseTarget(target_pose);
   
-  bool success = move_group.plan(my_plan);
-
-  if (success)
+  bool success = false;
+  do
   {
-    double temp_info[2] = {0.0, 0.0};
-    trajInfo(&(my_plan.trajectory_), robot_model, joint_model_group, kinematic_state, temp_info);
-    ROS_INFO("Planning successed");
-    ROS_INFO("Planning time: %f", my_plan.planning_time_);
-    ROS_INFO("Path length: %f", temp_info[0]);
-    ROS_INFO("Path smoothness: %f", temp_info[1]);
-  }
-  else
+    success = move_group.plan(my_plan);
     ROS_INFO("Failed");
+  }
+  while (!success);
+
+  double largest_jerk_cost = 0.0;
+  double shortest_length = 0.0;
+  double longest_length = 0.0;
+  double smallest_jerk_cost = 0.0;
+  int best_index = 0;
+  int worst_index = 0;
+
+  std::vector<moveit::planning_interface::MoveGroupInterface::Plan> all_plan;
+
+  double first_info[2] = {0.0, 0.0};
+  trajInfo(&(my_plan.trajectory_), robot_model, joint_model_group, kinematic_state, first_info);
+  ROS_INFO("Planning successed");
+  ROS_INFO("Planning time: %f", my_plan.planning_time_);
+  ROS_INFO("Path length: %f", first_info[0]);
+  ROS_INFO("Path smoothness: %f", first_info[1]);
+  
+  all_plan.push_back(my_plan);
+  longest_length = first_info[0];
+  shortest_length = first_info[0];
 
   ROS_INFO("Press b to start test, press any other key to quit");
   char is_test = 'n';
   std::cin >> is_test;
   if ( is_test == 'b' )
   {
+    ROS_INFO("Show all planning time? y/n");
+    char is_show = 'n';
+    std::cin >> is_show;
+    bool show_flag = (is_show == 'y');    
+    std::vector<double> all_planning_time;
+    std::vector<double> all_path_length;
+
     move_group.clearPoseTargets();
     move_group.setPoseTarget(target_pose);
-    ROS_INFO("Set iteration times");
+    ROS_INFO("Set total attempt times");
     int total_attempt = 1;
     std::cin >> total_attempt;
 
@@ -218,10 +241,28 @@ int main(int argc, char** argv)
       {
         number_success += 1;
         my_planning_time += my_plan.planning_time_;
+        
         double temp_info[2] = {0.0, 0.0};
         trajInfo(&(my_plan.trajectory_), robot_model, joint_model_group, kinematic_state, temp_info);
         my_length += temp_info[0];
         my_smoothness += temp_info[1];
+        
+        if (show_flag)
+        {
+          all_planning_time.push_back(my_plan.planning_time_);
+          all_path_length.push_back(temp_info[0]);
+        }
+        all_plan.push_back(my_plan);
+        if (temp_info[0] > longest_length)
+        {
+          worst_index = number_success;
+          longest_length = temp_info[0];
+        }
+        if (temp_info[0] < shortest_length)
+        {
+          best_index = number_success;
+          shortest_length = temp_info[0];
+        }
       }
 
     }
@@ -239,6 +280,51 @@ int main(int argc, char** argv)
 
     ROS_INFO("Rate: %f\nTime: %f\nLength: %f\nSmoothness: %f",
               success_rate, my_planning_time, my_length, my_smoothness);
+
+    if (show_flag)
+    {
+      ROS_INFO("Press any key to show all planning time");
+      char out_pause;
+      std::cin >> out_pause;
+      
+      FILE *pFileTime;
+      FILE *pFileLength;
+
+      pFileTime = fopen("/home/xy-fu/RRTConnectPlanningTime1000-50s.txt", "w");
+      pFileLength = fopen("/home/xy-fu/RRTConnectPathLength1000-50s.txt", "w");
+ 
+      for (double a_time : all_planning_time)
+      {
+        fprintf(pFileTime, "%6.4f \n",a_time);
+        printf("%6.4f\n", a_time);
+      }
+      for (double a_length : all_path_length)
+      {
+        fprintf(pFileLength, "%6.4f \n", a_length);
+      }
+      fclose(pFileTime);
+      fclose(pFileLength);
+    }
+
+    namespace rvt = rviz_visual_tools;
+    moveit_visual_tools::MoveItVisualTools visual_tools("base_link");
+    ROS_INFO("Now subscribe to /rviz_visual_tools in Rviz GUI and then press any key + enter to continue");
+    char vis_pause;
+    std::cin >> vis_pause;
+    
+    ROS_INFO("BEST LENGTH: %f, WORST LENGTH: %f", shortest_length, longest_length);
+
+    visual_tools.deleteAllMarkers();
+    rvt::colors my_color = rvt::colors::BLUE;
+    visual_tools.publishTrajectoryLine(all_plan[best_index].trajectory_, kinematic_state->getLinkModel("ee_link"), joint_model_group, my_color);
+    visual_tools.trigger();
+    sleep_one_second.sleep();
+    my_color = rvt::colors::RED;
+    visual_tools.publishTrajectoryLine(all_plan[worst_index].trajectory_, kinematic_state->getLinkModel("ee_link"), joint_model_group, my_color);
+    visual_tools.trigger();
+    sleep_one_second.sleep();
+    sleep_one_second.sleep();
+    sleep_one_second.sleep();
 
   }
   sleep_one_second.sleep();
