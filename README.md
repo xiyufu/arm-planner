@@ -1,9 +1,9 @@
 # arm-planner
-Compare different planners and IK solvers using the universial robot. Please install the robot's package first.
+Compare different planners and IK solvers using the universial robot. Please install the robot's package first. A report of the porject could be find in the name of "Report GIP Arm Planning.pdf"
 
 # Current files:
 
-Note: before running these nodes, launch the demo.launch in ur10_moveit_config package first.
+Note: before running these nodes, launch the demo.launch in ur10_moveit_config package.
 
 1. move_group_interface_test.cpp - just some test codes
 2. objects_test.cpp - just another test codes
